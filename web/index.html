@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jev Driving Agent - 上帝视角 Demo</title>
+<style>
+  :root {
+    --bg:#0e1320; --panel:#161d2e; --panel2:#1d2740; --line:#2b3854;
+    --text:#e8edf7; --dim:#8fa0c0; --accent:#4da3ff; --ok:#3ecf8e; --warn:#ffb454; --bad:#ff5d73;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:"Segoe UI","Microsoft YaHei",sans-serif; padding:16px; }
+  h1 { font-size:19px; }
+  .sub { color:var(--dim); font-size:12px; margin:4px 0 12px; }
+  .layout { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+
+  /* 左：道路 */
+  .road-card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  canvas { display:block; border-radius:8px; background:#10160f; }
+
+  /* 右：面板 */
+  .col { width:360px; max-width:96vw; display:flex; flex-direction:column; gap:12px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:13px; }
+  .card h2 { font-size:12px; color:var(--dim); letter-spacing:.08em; margin-bottom:9px; }
+
+  .row { display:flex; justify-content:space-between; align-items:baseline; margin:7px 0 3px; font-size:13px; }
+  .row .k { color:var(--dim); }
+  .bar { height:8px; background:#0c1018; border-radius:5px; overflow:hidden; }
+  .bar > i { display:block; height:100%; border-radius:5px; transition:width .45s ease; }
+  .bar.risk > i { background:linear-gradient(90deg,var(--ok),var(--warn),var(--bad)); }
+  .bar.conf > i { background:var(--accent); }
+  .probs { display:flex; flex-wrap:wrap; gap:5px; margin:5px 0 8px; }
+  .chip { font-size:11px; background:var(--panel2); border:1px solid var(--line); border-radius:20px; padding:2px 9px; color:var(--dim); }
+  .chip b { color:var(--text); }
+  .action-line { font-size:17px; font-weight:700; margin:2px 0 4px; }
+  .action-line .zh { font-size:12px; color:var(--dim); font-weight:400; margin-left:6px; }
+  .exec { font-size:15px; font-weight:700; color:var(--ok); margin:4px 0; }
+  .reasons li { font-size:11.5px; color:var(--warn); margin:3px 0 0 2px; list-style:none; }
+  .kv { display:flex; gap:12px; flex-wrap:wrap; margin-top:10px; padding-top:9px; border-top:1px solid var(--line); }
+  .kv div { font-size:11px; color:var(--dim); }
+  .kv b { color:var(--text); font-size:13px; display:block; }
+  .hint { color:var(--dim); font-size:11.5px; margin-top:9px; line-height:1.65; }
+
+  /* 控制条 */
+  .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  .ctl { background:var(--accent); color:#06121f; border:0; border-radius:8px; padding:8px 16px; font-size:13px; font-weight:600; cursor:pointer; }
+  .ctl.sec { background:var(--panel2); color:var(--text); border:1px solid var(--line); }
+  .ctl:disabled { opacity:.45; cursor:not-allowed; }
+  .density .ctl.active { outline:2px solid var(--accent); }
+  .status { color:var(--dim); font-size:12px; margin-left:4px; }
+  #err { color:var(--bad); font-size:12.5px; margin-top:8px; min-height:15px; }
+  #banner { display:none; background:#3a1520; border:1px solid var(--bad); color:#ffd7dd; border-radius:8px; padding:8px 12px; font-size:13px; margin-bottom:10px; }
+  .fallback { color:var(--bad); font-size:12px; margin-top:4px; }
+</style>
+</head>
+<body>
+  <h1>Jev Driving Agent <span style="color:var(--dim);font-size:13px">· 上帝视角 · Toy Environment</span></h1>
+  <div class="sub">上帝视角 3 车道街道 → ego 视角结构化状态 → Jev（Noul/Choice/Score 一次请求）→ 置信度门控 → 动作 → 世界更新 → 循环。默认静止，可单步观察每一步决策。</div>
+
+  <div class="controls">
+    <span style="color:var(--dim);font-size:12px">交通：</span>
+    <span class="density">
+      <button class="ctl sec" data-density="sparse">空旷</button>
+      <button class="ctl sec active" data-density="normal">普通</button>
+      <button class="ctl sec" data-density="jam">拥堵</button>
+    </span>
+    <button class="ctl" id="stepBtn" disabled>▶ 单步</button>
+    <button class="ctl sec" id="playBtn" disabled>自动循环</button>
+    <button class="ctl sec" id="modeBtn" title="切换 实时Jev / 回放预录">模式：实时</button>
+    <span class="status" id="status">正在初始化…</span>
+  </div>
+  <div id="banner">💥 发生碰撞 — 已停止。点击任意交通按钮重置。</div>
+
+  <div class="layout">
+    <div class="road-card"><canvas id="cv" width="560" height="680"></canvas></div>
+
+    <div class="col">
+      <div class="card">
+        <h2>JEV 决策</h2>
+        <div class="row"><span class="k">碰撞风险（Noul 0~1）</span><b id="riskVal">—</b></div>
+        <div class="bar risk"><i id="riskBar" style="width:0%"></i></div>
+        <div class="row"><span class="k">风险等级（Score）</span><b id="levelVal">—</b></div>
+        <div class="row" style="margin-top:8px"><span class="k">纵向动作（Choice）</span></div>
+        <div class="action-line" id="lonAction">—</div>
+        <div class="bar conf"><i id="lonConfBar" style="width:0%"></i></div>
+        <div class="probs" id="lonProbs"></div>
+        <div class="row"><span class="k">横向动作（Choice）</span></div>
+        <div class="action-line" id="latAction">—</div>
+        <div class="bar conf"><i id="latConfBar" style="width:0%"></i></div>
+        <div class="probs" id="latProbs"></div>
+      </div>
+
+      <div class="card">
+        <h2>执行与依据</h2>
+        <div class="exec" id="execAction">—</div>
+        <ul class="reasons" id="reasons"></ul>
+        <div class="fallback" id="fallbackMsg"></div>
+        <div class="kv">
+          <div>步数<b id="stepCount">0</b></div>
+          <div>延迟<b id="lastLat">—</b></div>
+          <div>平均延迟<b id="avgLat">—</b></div>
+          <div>模型<b id="modelName">—</b></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>EGO 视角状态（喂给 Jev 的内容）</h2>
+        <div class="kv" style="margin-top:2px;border:0;padding:0">
+          <div>速度<b id="sSpeed">—</b></div>
+          <div>车道<b id="sLane">—</b></div>
+          <div>前车距离<b id="sFront">—</b></div>
+          <div>前车速度<b id="sFrontSpd">—</b></div>
+          <div>左道可用<b id="sLeft">—</b></div>
+          <div>右道可用<b id="sRight">—</b></div>
+        </div>
+        <div class="hint">confidence 是模型对当前决策确定程度的信号，用于门控（阈值在 src/config.py，可改 .env 覆盖），不代表正确率。本地实验延迟不代表 Jev 官方性能。</div>
+      </div>
+      <div id="err"></div>
+    </div>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+
+const SCALE = 3.0;                 // px per metre
+const LANES = 3, LANE_W = 104;
+const ROAD_X = (cv.width - LANES*LANE_W) / 2;
+const EGO_Y = cv.height * 0.80;    // ego fixed near the bottom (god view)
+const VIEW_AHEAD_M = EGO_Y / SCALE;
+
+const ZH_LON = {accelerate:"加速", maintain:"保持", brake:"刹车"};
+const ZH_LAT = {keep_lane:"保持车道", change_left:"左变道", change_right:"右变道"};
+const ZH_LEVEL = ["安全","边缘","高危","临界"];
+const ZH_LEVEL_MAP = {safe:"安全", marginal:"边缘", high:"高危", critical:"临界"};
+
+let target = null;        // latest world from backend
+let disp = null;          // smoothed display state (Map by npc id + ego lane)
+let looping = false, busy = false, stepNo = 0, latencies = [];
+let mode = "live";        // "live" | "replay"
+let replayData = null;   // parsed web/replay.json
+let replayIdx = 0;       // next index into runs[density]
+
+// ---------- rendering ----------
+function laneX(l){ return ROAD_X + LANE_W*(l+0.5); }
+
+function drawRoad() {
+  const t = target;
+  ctx.fillStyle = "#151c14"; ctx.fillRect(0,0,cv.width,cv.height);      // 路肩草地
+  ctx.fillStyle = "#2b3340"; ctx.fillRect(ROAD_X,0,LANES*LANE_W,cv.height); // 沥青
+  ctx.fillStyle = "#e8edf7";                                            // 路缘
+  ctx.fillRect(ROAD_X-4,0,4,cv.height); ctx.fillRect(ROAD_X+LANES*LANE_W,0,4,cv.height);
+  // 车道虚线（随里程滚动 → 速度感）
+  const off = (t ? t.travelled : 0) * SCALE % 56;
+  ctx.strokeStyle = "#e8d44d"; ctx.lineWidth = 5; ctx.setLineDash([34,22]);
+  for (let l=1; l<LANES; l++) {
+    const x = ROAD_X + LANE_W*l;
+    ctx.beginPath(); ctx.lineDashOffset = -off;
+    ctx.moveTo(x,-20); ctx.lineTo(x,cv.height); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  // 远处地平线渐隐
+  const g = ctx.createLinearGradient(0,0,0,90);
+  g.addColorStop(0,"rgba(16,22,15,1)"); g.addColorStop(1,"rgba(16,22,15,0)");
+  ctx.fillStyle = g; ctx.fillRect(ROAD_X-4,0,LANES*LANE_W+8,90);
+}
+
+function drawCar(x, y, w, h, color, label) {
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.roundRect(x-w/2, y-h/2, w, h, 8); ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,.85)"; ctx.font = "11px sans-serif"; ctx.textAlign = "center";
+  if (label) ctx.fillText(label, x, y+4);
+}
+
+function draw() {
+  if (!target || !disp) { requestAnimationFrame(draw); return; }
+  drawRoad();
+  // NPC 平滑逼近目标位置（按稳定 id 匹配）
+  const seen = new Set();
+  for (const n of target.npcs) {
+    seen.add(String(n.id));
+    let d = disp.cars.get(String(n.id));
+    if (!d) { d = {pos:n.pos, lane:n.lane, speed:n.speed}; disp.cars.set(String(n.id), d); }
+    d.tpos = n.pos; d.tlane = n.lane; d.speed = n.speed;
+  }
+  for (const [k,d] of disp.cars) if (!seen.has(k)) disp.cars.delete(k);
+
+  const yOf = pos => EGO_Y - pos*SCALE;
+  for (const d of disp.cars.values()) {
+    d.pos += (d.tpos - d.pos)*0.14;
+    d.lane += (d.tlane - d.lane)*0.14;
+    const y = yOf(d.pos);
+    if (y > -40 && y < cv.height+40)
+      drawCar(laneX(d.lane), y, 40, 58, "#9aa7b8", String(Math.round(d.speed)));
+  }
+  // ego
+  disp.egoLane += (target.ego.ego_lane - disp.egoLane)*0.14;
+  const crashed = target.crashed;
+  drawCar(laneX(disp.egoLane), EGO_Y, 42, 62, crashed ? "#ff5d73" : "#4da3ff", "ego");
+  if (disp.actionLabel) {
+    ctx.fillStyle = "#e8edf7"; ctx.font = "12px sans-serif"; ctx.textAlign="center";
+    ctx.fillText(disp.actionLabel, laneX(disp.egoLane), EGO_Y+46);
+  }
+  // 视野标注
+  ctx.fillStyle = "rgba(232,237,247,.35)"; ctx.font="11px sans-serif"; ctx.textAlign="left";
+  ctx.fillText(`视野前方约 ${Math.round(VIEW_AHEAD_M)} m · 车辆数 ${target.npcs.length}`, ROAD_X, cv.height-10);
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+// ---------- panel ----------
+function chipHTML(probs){ return Object.entries(probs||{}).sort((a,b)=>b[1]-a[1])
+  .map(([k,v])=>`<span class="chip">${k} <b>${Number(v).toFixed(2)}</b></span>`).join(""); }
+
+function renderRecord(rec) {
+  const d = rec.decisions;
+  $("riskVal").textContent = Number(d.risk_noul).toFixed(2);
+  $("riskBar").style.width = (d.risk_noul*100).toFixed(0)+"%";
+  if (d.risk_level_score != null) {
+    const i = Math.max(0, Math.min(3, Math.round(d.risk_level_score)));
+    const names = Object.keys(ZH_LEVEL_MAP);
+    $("levelVal").textContent = `${Number(d.risk_level_score).toFixed(2)} → ${ZH_LEVEL[i]}（conf ${Number(d.risk_level_confidence).toFixed(2)}）`;
+  }
+  $("lonAction").innerHTML = `${(d.longitudinal.choice||"—").toUpperCase()}<span class="zh">${ZH_LON[d.longitudinal.choice]||""} · conf ${Number(d.longitudinal.confidence).toFixed(2)}</span>`;
+  $("lonConfBar").style.width = (d.longitudinal.confidence*100)+"%";
+  $("lonProbs").innerHTML = chipHTML(d.longitudinal.probabilities);
+  $("latAction").innerHTML = `${(d.lateral.choice||"—").toUpperCase()}<span class="zh">${ZH_LAT[d.lateral.choice]||""} · conf ${Number(d.lateral.confidence).toFixed(2)}</span>`;
+  $("latConfBar").style.width = (d.lateral.confidence*100)+"%";
+  $("latProbs").innerHTML = chipHTML(d.lateral.probabilities);
+
+  const ex = rec.executed_action;
+  $("execAction").textContent = ex.lateral==="keep_lane" ? ZH_LON[ex.longitudinal]
+      : `${ZH_LON[ex.longitudinal]} + ${ZH_LAT[ex.lateral]}`;
+  disp.actionLabel = (ZH_LON[ex.longitudinal]||"") + (ex.lateral!=="keep_lane" ? "·"+ZH_LAT[ex.lateral] : "");
+  $("reasons").innerHTML = (rec.reasons||[]).map(r=>`<li>▸ ${r}</li>`).join("");
+  $("fallbackMsg").textContent = rec.fallback ? "⚠ Jev 请求失败，已执行 fallback（刹车+保持车道）" : "";
+
+  stepNo++; latencies.push(rec.latency_ms);
+  $("stepCount").textContent = stepNo;
+  $("lastLat").textContent = Math.round(rec.latency_ms)+" ms";
+  $("avgLat").textContent = Math.round(latencies.reduce((a,b)=>a+b,0)/latencies.length)+" ms";
+  if (d.model) $("modelName").textContent = d.model;
+
+  const s = rec.state;   // ego-centric observation
+  $("sSpeed").textContent = Math.round(s.ego_speed)+" km/h（限速 "+Math.round(s.speed_limit)+"）";
+  $("sLane").textContent = "车道 "+s.ego_lane;
+  $("sFront").textContent = s.has_front_car ? s.front_distance.toFixed(1)+" m" : "无";
+  $("sFrontSpd").textContent = s.has_front_car ? Math.round(s.front_speed)+" km/h" : "—";
+  $("sLeft").textContent = s.left_lane_available ? "是" : "否";
+  $("sRight").textContent = s.right_lane_available ? "是" : "否";
+}
+
+// ---------- loop ----------
+async function doStep() {
+  if (busy || !target) return;
+  if (target.crashed) return;
+  busy = true; $("status").textContent = mode === "live" ? "Jev 决策中…" : "回放中…";
+  try {
+    let data;
+    if (mode === "live") {
+      const res = await fetch("/api/world/step", {method:"POST",
+        headers:{"Content-Type":"application/json"}, body: JSON.stringify({world: target})});
+      data = await res.json();
+      if (!res.ok) throw new Error(data.error || res.status);
+    } else {
+      // replay: pop the next pre-recorded frame
+      const run = (replayData && replayData.runs[target.density]) || [];
+      if (replayIdx >= run.length) { stopLoop(); $("status").textContent = "回放已结束"; busy = false; return; }
+      const frame = run[replayIdx++];
+      data = frame.crashed ? {record: null, world: frame.world}
+                           : {record: frame.record, world: frame.world};
+    }
+    $("err").textContent = "";
+    if (data.record) renderRecord(data.record);
+    target = data.world;
+    if (target.crashed) { $("banner").style.display="block"; stopLoop(); }
+    $("status").textContent = looping ? "自动循环中" : (mode === "live" ? "已暂停（单步可继续）" : "回放已暂停");
+  } catch(e) {
+    $("err").textContent = (mode==="live" ? "请求失败: " : "回放失败: ") + e.message;
+    stopLoop();
+  } finally { busy = false; }
+}
+function loopTick(){ if(!looping) return; doStep().then(()=>{ if(looping) setTimeout(loopTick, mode==="live"?250:500); }); }
+function startLoop(){ if(looping||!target||target.crashed) return; looping=true;
+  $("playBtn").textContent="⏸ 暂停"; loopTick(); }
+function stopLoop(){ looping=false; $("playBtn").textContent="自动循环";
+  if(target&&!target.crashed) $("status").textContent = mode==="live" ? "已暂停" : "回放已暂停"; }
+
+async function loadWorld(density, btn) {
+  stopLoop();
+  if (mode === "replay" && replayData && replayData.runs[density]) {
+    const run = replayData.runs[density];
+    if (run.length === 0) { $("err").textContent = "该密度无回放数据"; return; }
+    replayIdx = 0;
+    const firstWorld = run[0].world || (run[0].record && run[0].record.state) || null;
+    if (!firstWorld) { $("err").textContent = "回放数据格式错误"; return; }
+    target = JSON.parse(JSON.stringify(firstWorld));
+    disp = {cars:new Map(), egoLane: target.ego.ego_lane, actionLabel: ""};
+    stepNo=0; latencies=[];
+    $("stepCount").textContent="0"; $("lastLat").textContent="—"; $("avgLat").textContent="—";
+    $("riskVal").textContent="—"; $("riskBar").style.width="0%"; $("levelVal").textContent="—";
+    $("lonAction").textContent="—"; $("latAction").textContent="—";
+    $("lonConfBar").style.width="0%"; $("latConfBar").style.width="0%";
+    $("lonProbs").innerHTML=""; $("latProbs").innerHTML="";
+    $("execAction").textContent="—"; $("reasons").innerHTML=""; $("fallbackMsg").textContent="";
+    $("sSpeed").textContent="—"; $("sLane").textContent="—"; $("sFront").textContent="—";
+    $("sFrontSpd").textContent="—"; $("sLeft").textContent="—"; $("sRight").textContent="—";
+    $("stepBtn").disabled = $("playBtn").disabled = false;
+    $("status").textContent = `回放模式 · ${density}（共 ${run.length} 步，点单步/自动循环播放）`;
+    document.querySelectorAll(".density .ctl").forEach(b=>b.classList.remove("active"));
+    if (btn) btn.classList.add("active");
+    return;
+  }
+  $("status").textContent = "生成 "+density+" 世界…";
+  try {
+    const res = await fetch("/api/world/init", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({density})});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.status);
+    $("err").textContent=""; $("banner").style.display="none";
+    target = data.world;
+    disp = {cars:new Map(), egoLane: target.ego.ego_lane, actionLabel: ""};
+    stepNo=0; latencies=[];
+    $("stepCount").textContent="0"; $("lastLat").textContent="—"; $("avgLat").textContent="—";
+    $("riskVal").textContent="—"; $("riskBar").style.width="0%"; $("levelVal").textContent="—";
+    $("lonAction").textContent="—"; $("latAction").textContent="—";
+    $("lonConfBar").style.width="0%"; $("latConfBar").style.width="0%";
+    $("lonProbs").innerHTML=""; $("latProbs").innerHTML="";
+    $("execAction").textContent="—"; $("reasons").innerHTML=""; $("fallbackMsg").textContent="";
+    $("sSpeed").textContent="—"; $("sLane").textContent="—"; $("sFront").textContent="—";
+    $("sFrontSpd").textContent="—"; $("sLeft").textContent="—"; $("sRight").textContent="—";
+    $("stepBtn").disabled = $("playBtn").disabled = false;
+    $("status").textContent = "已生成（默认静止，点单步或自动循环）";
+    document.querySelectorAll(".density .ctl").forEach(b=>b.classList.remove("active"));
+    if (btn) btn.classList.add("active");
+  } catch(e) {
+    // If live mode fails (e.g. no API key), suggest switching to replay.
+    $("err").textContent = "实时模式失败: "+e.message+"（无 API key？点右上角『模式』切到回放）";
+    $("status").textContent="初始化失败";
+  }
+}
+
+// Fetch the pre-recorded replay log once on startup so the replay button works.
+async function ensureReplayLoaded() {
+  if (replayData) return replayData;
+  try {
+    const res = await fetch("/replay.json");
+    if (!res.ok) return null;
+    replayData = await res.json();
+    return replayData;
+  } catch { return null; }
+}
+
+async function toggleMode() {
+  stopLoop();
+  if (mode === "live") {
+    const r = await ensureReplayLoaded();
+    if (!r) { $("err").textContent = "回放数据未找到（web/replay.json）"; return; }
+    mode = "replay"; $("modeBtn").textContent = "模式：回放";
+    const cur = document.querySelector(".density .ctl.active");
+    loadWorld(cur ? cur.dataset.density : "normal", cur);
+  } else {
+    mode = "live"; $("modeBtn").textContent = "模式：实时";
+    const cur = document.querySelector(".density .ctl.active");
+    loadWorld(cur ? cur.dataset.density : "normal", cur);
+  }
+}
+
+$("stepBtn").onclick = doStep;
+$("playBtn").onclick = ()=> looping ? stopLoop() : startLoop();
+$("modeBtn").onclick = toggleMode;
+document.querySelectorAll(".density .ctl").forEach(b =>
+  b.onclick = ()=> loadWorld(b.dataset.density, b));
+
+// Boot: try live first; if it fails the user can switch to replay.
+loadWorld("normal", document.querySelector('.density .ctl[data-density="normal"]'));
+// Preload replay data so the mode toggle is instant.
+ensureReplayLoaded();
+</script>
+</body>
+</html>
