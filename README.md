@@ -69,7 +69,8 @@ jev-demo/
 ├── pyproject.toml
 ├── .env.example          # copy to .env and add your key
 ├── scripts/
-│   └── verify_jev.py     # Phase 1: minimal Jev API check
+│   ├── verify_jev.py     # Phase 1: minimal Jev API check
+│   └── make_replay.py     # pre-record real Jev decisions -> web/replay.json
 ├── src/
 │   ├── config.py         # ALL tunable thresholds/params (one place)
 │   ├── env.py            # VehicleState + toy environment step + scenarios
@@ -82,7 +83,8 @@ jev-demo/
 │   ├── webapp.py         # web UI backend (stdlib HTTP, no extra deps)
 │   └── main.py           # CLI entry point
 ├── web/
-│   └── index.html        # animated road web demo (single file, no build)
+│   ├── index.html        # animated road web demo (single file, no build)
+│   └── replay.json       # pre-recorded real Jev run (for replay mode)
 ├── logs/                 # generated JSONL run logs (auto-created)
 └── tests/                # pytest, no API key needed
 ```
@@ -102,6 +104,13 @@ pip install pytest
 ```
 
 ## 4. Configure the API key
+
+> **No API key? You can still try it.** The web demo has a **回放 (replay)** mode
+> that plays back a pre-recorded real Jev run (`web/replay.json`, generated with
+> `scripts/make_replay.py`). Just run `python -m src.main web`, open
+> <http://127.0.0.1:8000>, and click the **模式：实时** button to switch to
+> **回放**. No key, no network call to Jev — you watch exactly what Jev decided
+> in a real run. Use **实时** mode once you have your own key.
 
 1. Create a key at <https://console.typesafe.ai/keys>.
 2. Copy `.env.example` to `.env` and fill in:
@@ -154,7 +163,7 @@ python -m src.main continuous --steps 30 --sleep 1
 
 | Mode | What it does |
 |---|---|
-| `web` | **God-view animated demo** (recommended): 3-lane street with selectable traffic density (空旷 / 普通 / 拥堵), multi-car world rendered top-down with ~170m lookahead. Ego makes live Jev decisions; the ego-centric state actually sent to Jev is shown in the panel. Starts paused so you can single-step through decisions. |
+| `web` | **God-view animated demo** (recommended): 3-lane street with selectable traffic density (空旷 / 普通 / 拥堵), multi-car world rendered top-down with ~170m lookahead. Two modes via the **模式：实时/回放** button: **实时 (live)** runs real Jev decisions against the API (needs a key); **回放 (replay)** plays back a pre-recorded real Jev run (`web/replay.json`) so visitors without a key can still watch what Jev decides. Starts paused so you can single-step through decisions. |
 | `manual` | Choose one of 7 preset scenarios (or type a custom state block), run N steps. For quick testing. |
 | `random` | Generate one plausible random state, run N steps. |
 | `continuous` | Continuous loop for N steps with a sleep between them. Shows the real-time agent loop. |
@@ -327,11 +336,11 @@ and can be overridden by environment variables:
 | Parameter | Default | Meaning |
 |---|---|---|
 | `RISK_THRESHOLD` | 0.8 | Noul collision risk above this forces brake. |
-| `LANE_CHANGE_CONFIDENCE_THRESHOLD` | 0.6 | Lateral confidence below this → keep_lane. |
+| `LANE_CHANGE_CONFIDENCE_THRESHOLD` | 0.35 | Lateral confidence below this → keep_lane. Lower = more willing to act on a weak lane-change signal. |
 | `LONGITUDINAL_CONFIDENCE_THRESHOLD` | 0.5 | Longitudinal confidence below this → maintain. |
 | `CRITICAL_FRONT_DISTANCE_M` | 8.0 | Gap at/under this forces brake (safety net). |
 | `DT_S` | 1.0 | Time step for the distance update. |
-| `NUM_LANES` | 2 | Road width (lane ids `0..N-1`). |
+| `NUM_LANES` | 3 | Road width (lane ids `0..N-1`). |
 
 Safety rules (in `decision.py`): speed never goes below 0 or above the limit;
 illegal lane changes become `keep_lane`; critical gaps force brake; and **API
