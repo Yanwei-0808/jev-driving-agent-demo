@@ -30,6 +30,15 @@ class VehicleState:
     right_lane_available: bool
     speed_limit: float        # km/h
     lane_offset: float = 0.0  # metres from lane centre (cosmetic, for rendering)
+    # Driver intent (selectable driving mode) -> fed to Jev so it can weigh
+    # progress vs caution. urgency in {relaxed, normal, rushing}.
+    urgency: str = "normal"
+    target_speed_kmh: float = 0.0   # km/h the driver aims for (<= speed limit)
+    # Nearest car behind in the ego lane (reference only; does not force an
+    # action by itself). rear_distance is positive (metres behind ego).
+    has_rear_car: bool = False
+    rear_distance: float = 200.0
+    rear_speed: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -45,6 +54,9 @@ class VehicleState:
         d["front_distance_m"] = d.pop("front_distance")
         d["speed_limit_kmh"] = d.pop("speed_limit")
         d["lane_offset_m"] = d.pop("lane_offset")
+        # target_speed_kmh already carries its unit in the name; rear_* get units.
+        d["rear_speed_kmh"] = d.pop("rear_speed")
+        d["rear_distance_m"] = d.pop("rear_distance")
         d["num_lanes"] = C.NUM_LANES
         return d
 
@@ -86,6 +98,8 @@ def validate(state: VehicleState) -> list[str]:
         problems.append("left_lane_available but ego already in leftmost lane")
     if state.ego_lane == C.NUM_LANES - 1 and state.right_lane_available:
         problems.append("right_lane_available but ego already in rightmost lane")
+    if state.rear_distance <= 0:
+        problems.append("rear_distance <= 0")
     return problems
 
 
@@ -139,6 +153,10 @@ def step(state: VehicleState, action: Action) -> VehicleState:
         right_lane_available=state.right_lane_available,
         speed_limit=state.speed_limit,
         lane_offset=state.lane_offset,
+        # Driver intent is persistent across steps; rear-car fields are
+        # re-derived from the world each step, so they are not carried here.
+        urgency=state.urgency,
+        target_speed_kmh=state.target_speed_kmh,
     )
     _update_front_distance(next_state)
     return next_state
@@ -188,6 +206,7 @@ def random_state(rng: random.Random | None = None) -> VehicleState:
         right_lane_available=right_available,
         speed_limit=speed_limit,
         lane_offset=round(rng.uniform(-0.3, 0.3), 2),
+        target_speed_kmh=float(speed_limit),
     )
     # Guarantee constraints hold.
     problems = validate(state)
@@ -239,7 +258,7 @@ def preset_scenarios() -> list[tuple[str, str, VehicleState]]:
         (
             "Rushing, late (快速赶时间)",
             "Fast ego closing on a slow car; expect change_right or brake",
-            VehicleState(78, 0, 25, 50, True, False, True, 80),
+            VehicleState(78, 0, 25, 50, True, False, True, 80, urgency="rushing", target_speed_kmh=80),
         ),
     ]
 
@@ -273,6 +292,11 @@ def state_from_text(text: str) -> VehicleState:
         ),
         speed_limit=float(_get("speed_limit", float, 80)),
         lane_offset=float(_get("lane_offset", float, 0.0)),
+        urgency=str(_get("urgency", str, "normal")),
+        target_speed_kmh=float(_get("target_speed_kmh", float, 0.0)),
+        has_rear_car=bool(_get("has_rear_car", lambda v: v.lower() == "true", False)),
+        rear_distance=float(_get("rear_distance", float, 200.0)),
+        rear_speed=float(_get("rear_speed", float, 0.0)),
     )
 
 

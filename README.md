@@ -28,9 +28,9 @@ Vehicle State  ->  Jev (one request, multiple typed questions)
 | Jev concept | Where it shows up in this project |
 |---|---|
 | **System One** (fast, local decisions) | Each loop step asks Jev for an instant decision instead of a long reasoning trace. |
-| **Atomic Questions** | The driving task is split into independent questions: risk, longitudinal, lateral, risk-level. |
+| **Atomic Questions** | The driving task is split into independent questions: risk, rear-collision-risk, longitudinal, lateral, risk-level. |
 | **Choice** | Longitudinal (`accelerate`/`maintain`/`brake`) and lateral (`keep_lane`/`change_left`/`change_right`) action selection. |
-| **Noul** | Collision-risk judgement (`0..1`). Noul has **no separate `confidence`** — the number itself is the belief. |
+| **Noul** | Collision-risk judgement (`0..1`). Noul has **no separate `confidence`** — the number itself is the belief. A second Noul question covers rear-collision (tailgating) risk. |
 | **Score** | Risk-severity rating on an ordered rubric `safe/marginal/high/critical`, to also showcase the Score primitive. |
 | **Probabilities** | Every Choice/Score answer exposes the full probability distribution over options. |
 | **Confidence** | Choice/Score answers carry `confidence`; it gates whether an action is auto-executed. |
@@ -163,7 +163,7 @@ python -m src.main continuous --steps 30 --sleep 1
 
 | Mode | What it does |
 |---|---|
-| `web` | **God-view animated demo** (recommended): 3-lane street with selectable traffic density (空旷 / 普通 / 拥堵), multi-car world rendered top-down with ~170m lookahead. Two modes via the **模式：实时/回放** button: **实时 (live)** runs real Jev decisions against the API (needs a key); **回放 (replay)** plays back a pre-recorded real Jev run (`web/replay.json`) so visitors without a key can still watch what Jev decides. Starts paused so you can single-step through decisions. |
+| `web` | **God-view animated demo** (recommended): 3-lane street with selectable traffic density (空旷 / 普通 / 拥堵) and **driving mode** (舒适 / 正常 / 赶时间 → target speed + urgency sent to Jev). Multi-car world rendered top-down with ego fixed at the bottom. **Rear traffic** spawns faster cars behind the ego that catch up and overtake; Jev evaluates rear-collision risk via a dedicated Noul question (reference only — does not change the ego action). Two modes via the **模式：实时/回放** button: **实时 (live)** runs real Jev decisions against the API (needs a key); **回放 (replay)** plays back a pre-recorded real Jev run (`web/replay.json`) so visitors without a key can still watch what Jev decides. Starts paused so you can single-step through decisions. |
 | `manual` | Choose one of 7 preset scenarios (or type a custom state block), run N steps. For quick testing. |
 | `random` | Generate one plausible random state, run N steps. |
 | `continuous` | Continuous loop for N steps with a sleep between them. Shows the real-time agent loop. |
@@ -294,9 +294,10 @@ Example JSONL record:
   "step": 10,
   "timestamp": "2026-09-22T14:03:11",
   "state": {"ego_speed": 72, "ego_lane": 1, "front_distance": 18.0, "...": "..."},
-  "questions": ["collision_risk", "risk_level", "longitudinal", "lateral"],
+  "questions": ["collision_risk", "rear_collision_risk", "risk_level", "longitudinal", "lateral"],
   "decisions": {
     "risk_noul": 0.82,
+    "rear_noul": 0.15,
     "longitudinal": {"choice": "brake", "confidence": 0.94, "probabilities": {"brake": 0.94, "...": "..."}},
     "lateral": {"choice": "change_left", "confidence": 0.61, "probabilities": {"...": "..."}},
     "latency_ms": 142.0,
@@ -318,7 +319,7 @@ All official Jev / TypeSafe API usage is isolated in
 
 - `JevAgent.__init__` constructs the official `TypeSafeClient(api_key=..., model=..., timeout=...)`.
 - `JevAgent.decide` builds the `Noul`/`Score`/`Choice` questions and calls
-  `client.system_one(state=..., questions=...)` — **one request, four questions**.
+  `client.system_one(state=..., questions=...)` — **one request, five questions**.
 - `_parse` reads `response.nouls` / `response.scores` / `response.choices`.
 - API failures are caught (`TypeSafeAPIError`, `TypeSafeAPITimeoutError`, etc.)
   and turned into a conservative **fallback decision (brake + keep_lane)**.
@@ -341,6 +342,8 @@ and can be overridden by environment variables:
 | `CRITICAL_FRONT_DISTANCE_M` | 8.0 | Gap at/under this forces brake (safety net). |
 | `DT_S` | 1.0 | Time step for the distance update. |
 | `NUM_LANES` | 3 | Road width (lane ids `0..N-1`). |
+| `DRIVING_MODES` | comfort/normal/rush | Maps mode label → `target_speed` + `urgency` sent to Jev. `comfort`=45 km/h relaxed, `normal`=60 km/h, `rush`=80 km/h rushing. |
+| `DEFAULT_DRIVING_MODE` | `normal` | Initial driving mode when the web demo starts. |
 
 Safety rules (in `decision.py`): speed never goes below 0 or above the limit;
 illegal lane changes become `keep_lane`; critical gaps force brake; and **API

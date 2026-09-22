@@ -130,6 +130,28 @@ def test_to_jev_state_has_unit_keys():
     assert "num_lanes" in d
 
 
+def test_to_jev_state_has_rear_and_mode_keys():
+    s = env.VehicleState(
+        72, 1, 18, 55, True, True, False, 80,
+        urgency="rushing", target_speed_kmh=80,
+        has_rear_car=True, rear_distance=40, rear_speed=90,
+    )
+    d = s.to_jev_state()
+    assert d["urgency"] == "rushing"
+    assert d["target_speed_kmh"] == 80
+    assert d["rear_distance_m"] == 40
+    assert d["rear_speed_kmh"] == 90
+
+
+def test_validate_rear_distance_must_be_positive():
+    s = env.VehicleState(
+        72, 1, 18, 55, True, True, False, 80,
+        has_rear_car=True, rear_distance=-5, rear_speed=90,
+    )
+    problems = env.validate(s)
+    assert any("rear_distance" in p for p in problems)
+
+
 def test_decision_compose_risk_override():
     """Phase 4 logic: high noul risk with NO lane change available forces brake
     even if Choice said accelerate."""

@@ -57,6 +57,19 @@ LONGITUDINAL_CONFIDENCE_THRESHOLD: float = _env_float(
 )
 
 # --------------------------------------------------------------------------- #
+# Driving mode (driver intent) -> target speed + urgency label
+# --------------------------------------------------------------------------- #
+# A selectable driver intent. Sets a target speed (km/h, the speed the driver
+# aims for, at or below the limit) and an urgency label sent to Jev so it can
+# weigh progress vs caution. Keys are stable ids used by the web UI / CLI.
+DRIVING_MODES: dict[str, dict] = {
+    "comfort": {"label": "舒适", "target_speed": 45, "urgency": "relaxed"},
+    "normal":  {"label": "正常", "target_speed": 60, "urgency": "normal"},
+    "rush":    {"label": "赶时间", "target_speed": 80, "urgency": "rushing"},
+}
+DEFAULT_DRIVING_MODE: str = "normal"
+
+# --------------------------------------------------------------------------- #
 # Toy environment physics
 # --------------------------------------------------------------------------- #
 # Length of one simulation step (seconds). Used to update front_distance from
@@ -97,6 +110,8 @@ __all__ = [
     "RISK_THRESHOLD",
     "LANE_CHANGE_CONFIDENCE_THRESHOLD",
     "LONGITUDINAL_CONFIDENCE_THRESHOLD",
+    "DRIVING_MODES",
+    "DEFAULT_DRIVING_MODE",
     "DT_S",
     "ACCEL_DELTA_KMH",
     "BRAKE_DELTA_KMH",

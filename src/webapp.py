@@ -37,6 +37,7 @@ from .decision import compose_action
 from .env import step as env_step
 from .jev_agent import JevAgent
 from .world import DENSITIES, World, make_world
+from . import config as C
 
 WEB_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web"
@@ -135,7 +136,11 @@ class Handler(BaseHTTPRequestHandler):
                 if density not in DENSITIES:
                     self._send(400, {"error": f"density must be one of {list(DENSITIES)}"})
                     return
-                self._send(200, {"world": make_world(density).to_dict()})
+                mode = payload.get("mode", C.DEFAULT_DRIVING_MODE)
+                if mode not in C.DRIVING_MODES:
+                    self._send(400, {"error": f"mode must be one of {list(C.DRIVING_MODES)}"})
+                    return
+                self._send(200, {"world": make_world(density, mode=mode).to_dict()})
             elif path == "/api/world/step":
                 world = World.from_dict(payload["world"])
                 self._send(200, run_world_step(world))

@@ -61,8 +61,9 @@ class JevDecision:
     """
 
     risk_noul: float                                   # 0..1
-    risk_level_score: float | None                     # 0..len(levels)-1
-    risk_level_confidence: float | None
+    rear_noul: float = 0.0                              # 0..1 (rear collision risk)
+    risk_level_score: float | None = None              # 0..len(levels)-1
+    risk_level_confidence: float | None = None
     risk_level_probabilities: dict[int, float] = field(default_factory=dict)
     risk_level_legend: dict[int, str] = field(default_factory=dict)
 
@@ -87,6 +88,7 @@ class JevDecision:
     def to_dict(self) -> dict:
         return {
             "risk_noul": self.risk_noul,
+            "rear_noul": self.rear_noul,
             "risk_level_score": self.risk_level_score,
             "risk_level_confidence": self.risk_level_confidence,
             "risk_level_probabilities": dict(self.risk_level_probabilities),
@@ -121,6 +123,7 @@ def _fallback_decision(error: str, latency_ms: float) -> JevDecision:
     """
     return JevDecision(
         risk_noul=1.0,  # assume worst case
+        rear_noul=1.0,  # assume worst case
         risk_level_score=None,
         risk_level_confidence=None,
         longitudinal_choice="brake",
@@ -135,16 +138,22 @@ def _fallback_decision(error: str, latency_ms: float) -> JevDecision:
 
 
 def _build_longitudinal_question(state: VehicleState) -> Choice:
+    target = state.target_speed_kmh or state.speed_limit
+    urgency_hint = {
+        "rushing": "The driver is in a hurry (urgency=rushing): more willing to accelerate and overtake slow traffic to reach the target speed.",
+        "relaxed": "The driver prefers a calm pace (urgency=relaxed): avoid needless acceleration; keep speed steady when safe.",
+    }.get(state.urgency, "The driver wants steady progress (urgency=normal).")
     return Choice(
         instructions=(
-            "The ego vehicle wants to make progress toward its speed limit "
-            "while staying safe. Given the gap to the front car, relative "
-            "speeds, the speed limit and collision risk, what longitudinal "
-            "action should it take next? Prefer accelerate whenever it is "
-            "safe to do so. Choose exactly one."
+            f"The ego driver targets {target:.0f} km/h (hard cap = speed limit "
+            f"{state.speed_limit:.0f} km/h). {urgency_hint} Given the gap to the "
+            "front car, relative speeds and collision risk, what longitudinal "
+            "action should it take next toward the target speed? Prefer "
+            "accelerate whenever it is safe and below the target/limit. "
+            "Choose exactly one."
         ),
         criteria={
-            "accelerate": "Safe to speed up toward the limit; room ahead and no closing threat.",
+            "accelerate": "Safe to speed up toward the target; room ahead and no closing threat.",
             "maintain": "Hold current speed; gap is adequate but not enough to safely accelerate.",
             "brake": "Reduce speed now; gap is small, front car is slower, or risk is high.",
         },
@@ -211,6 +220,29 @@ def _build_risk_noul(state: VehicleState) -> Noul:
     )
 
 
+def _build_rear_risk_noul(state: VehicleState) -> Noul:
+    """Rear collision risk: is a faster car approaching from behind?"""
+    instructions = (
+        "Is there a high risk of a rear-end collision in the near term? "
+        "Consider whether a car behind in the ego lane is closing the gap "
+        "fast."
+    )
+    if state.has_rear_car:
+        instructions += (
+            f" A car is behind at {state.rear_distance:.0f} m doing "
+            f"{state.rear_speed:.0f} km/h."
+        )
+    else:
+        instructions += " No car is currently behind in the ego lane."
+    return Noul(
+        instructions=instructions,
+        criteria={
+            "true": "A faster car is close behind and closing the gap quickly.",
+            "false": "No close fast-approaching car behind; rear risk is low.",
+        },
+    )
+
+
 def _build_risk_level_score(state: VehicleState) -> Score:
     return Score(
         instructions=(
@@ -253,6 +285,7 @@ class JevAgent:
         """Build the questions, call Jev once, and parse the structured answer."""
         questions = {
             "collision_risk": _build_risk_noul(state),
+            "rear_collision_risk": _build_rear_risk_noul(state),
             "risk_level": _build_risk_level_score(state),
             "longitudinal": _build_longitudinal_question(state),
             "lateral": _build_lateral_question(state),
@@ -289,6 +322,7 @@ class JevAgent:
         scores = getattr(response, "scores", {}) or {}
 
         risk = nouls.get("collision_risk")
+        rear = nouls.get("rear_collision_risk")
         level = scores.get("risk_level")
         lon = choices.get("longitudinal")
         lat = choices.get("lateral")
@@ -300,9 +334,11 @@ class JevAgent:
             raw = {}
 
         risk_noul = float(getattr(risk, "noul", 0.0)) if risk else 0.0
+        rear_noul = float(getattr(rear, "noul", 0.0)) if rear else 0.0
 
         return JevDecision(
             risk_noul=risk_noul,
+            rear_noul=rear_noul,
             risk_level_score=float(getattr(level, "score", 0.0)) if level else None,
             risk_level_confidence=(
                 float(getattr(level, "confidence", 0.0)) if level else None

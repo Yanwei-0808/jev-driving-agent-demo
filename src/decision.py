@@ -76,6 +76,15 @@ def compose_action(decision: JevDecision, state: VehicleState) -> DecisionTrace:
             reasons=reasons,
         )
 
+    # ---- Rear risk (reference only) -------------------------------------- #
+    # Per the demo policy, the rear-collision Noul is informational: it does
+    # NOT force a lane change or brake. We just surface it as context.
+    if decision.rear_noul >= 0.5:
+        reasons.append(
+            f"Rear collision risk (Noul) {decision.rear_noul:.2f} is notable "
+            f"(reference only; not changing the action)"
+        )
+
     # ---- Longitudinal ----------------------------------------------------- #
     longitudinal = decision.longitudinal_choice or "maintain"
     if longitudinal not in ("accelerate", "maintain", "brake"):

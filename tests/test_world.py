@@ -11,7 +11,8 @@ from src.world import DENSITIES, Npc, World, make_world
 
 def _world_with(npcs, lane=1, speed=60) -> World:
     ego = VehicleState(speed, lane, 200, 0, False, False, False, 80)
-    return World(ego=ego, npcs=list(npcs), density="normal")
+    next_id = max((n.id for n in npcs), default=0) + 1
+    return World(ego=ego, npcs=list(npcs), density="normal", _next_id=next_id)
 
 
 def test_observe_nearest_front_car():
@@ -87,11 +88,63 @@ def test_make_world_all_densities():
         assert C.NUM_LANES // 2 == w.ego.ego_lane
         for n in w.npcs:
             assert 0 <= n.lane < C.NUM_LANES
-            assert n.pos > 0
+            # Ahead cars have positive pos; rear cars (overtaking) have negative pos.
+            assert n.pos != 0
         # ego-centric observation must be valid
         from src.env import validate
 
         assert validate(w.observe()) == []
+
+
+def test_make_world_creates_rear_cars():
+    """make_world seeds at least one rear car so rear risk shows up early."""
+    w = make_world("normal", rng=random.Random(1))
+    behind = [n for n in w.npcs if n.pos < 0]
+    assert len(behind) >= 1
+    # Rear cars are faster than ego so they will catch up.
+    assert all(n.speed > w.ego.ego_speed for n in behind)
+
+
+def test_make_world_driving_mode_passthrough():
+    """driving_mode is stored on the world and flows into observe() urgency/target."""
+    for mode_key, mcfg in C.DRIVING_MODES.items():
+        w = make_world("normal", rng=random.Random(1), mode=mode_key)
+        assert w.driving_mode == mode_key
+        obs = w.observe()
+        assert obs.urgency == mcfg["urgency"]
+        assert obs.target_speed_kmh == float(mcfg["target_speed"])
+
+
+def test_observe_rear_car_nearest_behind():
+    """observe() reports the closest behind car (least negative pos)."""
+    w = _world_with([Npc(1, 1, -30, 70), Npc(2, 1, -120, 65)])
+    obs = w.observe()
+    assert obs.has_rear_car is True
+    assert obs.rear_distance == 30      # -(-30)
+    assert obs.rear_speed == 70
+
+
+def test_observe_no_rear_car():
+    """No car behind -> has_rear_car False, defaults."""
+    w = _world_with([Npc(1, 0, 50, 50)], lane=1)
+    obs = w.observe()
+    assert obs.has_rear_car is False
+    assert obs.rear_distance == 200
+    assert obs.rear_speed == 0
+
+
+def test_rear_car_tailgates_not_through_ego():
+    """A faster rear car in the ego lane is clamped behind ego (virtual lead)."""
+    # 5 m behind, 12 km/h faster -> after 1s moves +3.33m to -1.67, still behind;
+    # car-following then clamps it to 10m behind ego (pos=-10).
+    w = _world_with([Npc(1, 1, -5, 72)])
+    ego_after = env_step(w.observe(), type("A", (), {"longitudinal": "maintain", "lateral": "keep_lane"})())
+    w.advance(ego_after, rng=random.Random(0))
+    # The original rear car (id=1, lane=1) must still be behind ego.
+    rear = [n for n in w.npcs if n.id == 1 and n.lane == 1]
+    assert len(rear) == 1
+    assert rear[0].pos < 0
+    assert rear[0].speed <= w.ego.ego_speed  # slowed down to match ego
 
 
 def test_world_roundtrip():
@@ -107,7 +160,8 @@ def test_world_roundtrip():
 def test_following_prevents_overlap():
     w = _world_with([Npc(1, 1, 40, 60), Npc(2, 1, 30, 90)])
     ego_after = env_step(w.observe(), type("A", (), {"longitudinal": "maintain", "lateral": "keep_lane"})())
-    w.advance(ego_after)
-    cars = sorted(w.npcs, key=lambda n: -n.pos)
+    w.advance(ego_after, rng=random.Random(0))
+    # Only check same-lane NPCs near the ego (spawned cars are 190+ m away).
+    cars = sorted([n for n in w.npcs if n.lane == 1 and n.pos < 100], key=lambda n: -n.pos)
     # front car must still be ahead of the back car by >= 10m
     assert cars[0].pos - cars[1].pos >= 10.0 - 1e-6
