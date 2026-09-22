@@ -91,7 +91,72 @@ jev-demo/
 
 ---
 
-## 3. Install
+## 3. Quick Start（两种体验路径）
+
+### 路径 A：没有 API key（回放模式，推荐先试）
+
+> 无需申请 key、无需联网调 Jev，直接看预录的真实 Jev 决策。
+
+```bash
+# 1. 克隆仓库
+git clone https://github.com/Yanwei-0808/jev-driving-agent-demo.git
+cd jev-driving-agent-demo
+
+# 2. 安装依赖（仅 2 个包）
+pip install typesafe-sdk python-dotenv
+
+# 3. 启动 Web Demo
+python -m src.main web
+```
+
+浏览器打开 <http://127.0.0.1:8000>，然后：
+
+1. 点击 **「模式：实时」** 按钮 → 切换为 **「模式：回放」**
+2. 选择交通密度（空旷 / 普通 / 拥堵）
+3. 点击 **「▶ 单步」** 逐步观看 Jev 决策，或 **「自动循环」** 连续播放
+4. 观察右侧面板：碰撞风险（Noul）、后车追尾风险（Noul）、风险等级（Score）、纵向/横向动作（Choice）
+
+### 路径 B：有 API key（实时模式）
+
+> 让 Jev 对当前场景做实时决策，延迟和结果都是真实的。
+
+```bash
+# 1. 克隆 + 安装（同路径 A）
+git clone https://github.com/Yanwei-0808/jev-driving-agent-demo.git
+cd jev-driving-agent-demo
+pip install typesafe-sdk python-dotenv
+
+# 2. 配置 API key
+cp .env.example .env          # Windows: copy .env.example .env
+# 编辑 .env，填入 TYPESAFE_API_KEY=your_key_here
+
+# 3.（可选）验证 key 是否可用
+python scripts/verify_jev.py
+
+# 4. 启动 Web Demo
+python -m src.main web
+```
+
+浏览器打开 <http://127.0.0.1:8000>，保持 **「模式：实时」**（默认），选驾驶模式（舒适 / 正常 / 赶时间），点 **「▶ 单步」** 或 **「自动循环」** 即可。
+
+> API key 申请：<https://console.typesafe.ai/keys>
+
+### Web Demo 界面说明
+
+| 界面元素 | 作用 |
+|---|---|
+| **交通** 按钮（空旷/普通/拥堵） | 切换车流密度，点击即重置世界 |
+| **驾驶** 按钮（舒适/正常/赶时间） | 切换驾驶模式 → 目标车速 + 是否着急发给 Jev，点击即重置世界 |
+| **模式：实时/回放** | 实时 = 调真实 Jev API（需 key）；回放 = 播放预录（无需 key） |
+| **▶ 单步** | 执行一步 Jev 决策并更新世界 |
+| **自动循环** | 连续执行 Jev 决策循环 |
+| 右侧决策面板 | 碰撞风险 Noul、后车追尾 Noul、风险等级 Score、纵向/横向 Choice（含概率分布 + 置信度） |
+| 右侧 EGO 状态面板 | 喂给 Jev 的结构化状态：车速、目标车速、是否着急、车道、前车/后车距离与速度、左右道可用性 |
+| 道路画布 | 上帝视角 3 车道，ego 固定底部（蓝色），前车灰白，后车暖色（会超越 ego） |
+
+---
+
+## 4. Install (detailed)
 
 Requires Python >= 3.10.
 
@@ -103,14 +168,11 @@ pip install typesafe-sdk python-dotenv
 pip install pytest
 ```
 
-## 4. Configure the API key
+## 5. Configure the API key (detailed)
 
-> **No API key? You can still try it.** The web demo has a **回放 (replay)** mode
-> that plays back a pre-recorded real Jev run (`web/replay.json`, generated with
-> `scripts/make_replay.py`). Just run `python -m src.main web`, open
-> <http://127.0.0.1:8000>, and click the **模式：实时** button to switch to
-> **回放**. No key, no network call to Jev — you watch exactly what Jev decided
-> in a real run. Use **实时** mode once you have your own key.
+> **No API key?** See [Quick Start 路径 A](#3-quick-start两种体验路径) above —
+> the web demo has a **回放 (replay)** mode that plays back a pre-recorded real
+> Jev run (`web/replay.json`), no key needed.
 
 1. Create a key at <https://console.typesafe.ai/keys>.
 2. Copy `.env.example` to `.env` and fill in:
@@ -140,7 +202,7 @@ latency. If this works, the rest of the project will too.
 
 ---
 
-## 5. Run
+## 6. Run
 
 ```bash
 # interactive menu
@@ -200,7 +262,7 @@ Units: speed in km/h, distance in m, lane in `0..NUM_LANES-1`.
 
 ---
 
-## 6. An actual run example
+## 7. An actual run example
 
 Dashboard frame from `python -m src.main manual --preset 3` (step 17 of a run;
 values are illustrative — actual numbers come from Jev when you run it):
@@ -263,7 +325,7 @@ Latency: 142.0 ms
 
 ---
 
-## 7. View latency and confidence
+## 8. View latency and confidence
 
 - **Per step:** the dashboard prints `Latency: <ms>` and a `confidence:` line
   under each Choice/Score answer.
@@ -312,7 +374,7 @@ Example JSONL record:
 
 ---
 
-## 8. Where the official API call lives
+## 9. Where the official API call lives
 
 All official Jev / TypeSafe API usage is isolated in
 [`src/jev_agent.py`](file:///d:/phyagentos/cvpr/jev-demo/src/jev_agent.py):
@@ -329,7 +391,7 @@ The minimal standalone call is in
 
 ---
 
-## 9. Configuration & safety
+## 10. Configuration & safety
 
 All thresholds live in [`src/config.py`](file:///d:/phyagentos/cvpr/jev-demo/src/config.py)
 and can be overridden by environment variables:
@@ -352,7 +414,7 @@ action because Jev was unreachable.
 
 ---
 
-## 10. Tests
+## 11. Tests
 
 ```bash
 pytest -q
@@ -364,7 +426,7 @@ API key needed). Real-API behaviour is verified by `scripts/verify_jev.py`.
 
 ---
 
-## 11. Disclaimers
+## 12. Disclaimers
 
 - This is a **Toy Environment**, not an autonomous-driving system.
 - It is **not** a benchmark of Jev's official performance.
